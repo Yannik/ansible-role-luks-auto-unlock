@@ -1,0 +1,79 @@
+- name: Install expect
+  apt:
+    pkg:
+      - expect
+      - python-pexpect
+
+- name: Find root-partition crypt device
+  shell: |
+    root=$(grep -o "root=[^ ]*" /proc/cmdline | cut -d "=" -f2);
+    lsblk --inverse --paths --list --noheadings "$root" | awk '$6=="crypt" {getline; print $1}'
+  changed_when: false
+  register: cryptroot
+
+- name: Check if found partition is valid luks device
+  command: cryptsetup luksDump {{ cryptroot.stdout }}
+  changed_when: false
+
+- name: Get crypt mapper name
+  shell: |
+    root=$(grep -o "root=[^ ]*" /proc/cmdline | cut -d "=" -f2);
+    lsblk --inverse --list --noheadings "$root" | awk '$6=="crypt" {print $1}'
+  changed_when: false
+  register: cryptroot_mapper_name
+
+- name: Create /crypto_keyfile.bin
+  command:
+    cmd: dd bs=512 count=4 if=/dev/urandom of=/crypto_keyfile.bin
+    creates: /crypto_keyfile.bin
+  register: crypto_keyfile
+
+# we cannot use the master key on LUKS2 (https://access.redhat.com/solutions/1543373)
+- name: prompt for luks password
+  pause:
+    prompt: Enter LUKS password
+    echo: no
+  no_log: True
+  register: luks_pass
+  when: crypto_keyfile is changed
+
+- name: Add crypto keyfile to luks
+  expect:
+    command: cryptsetup luksAddKey {{ cryptroot.stdout }} /crypto_keyfile.bin
+    responses:
+      passphrase: "{{ luks_pass.user_input }}"
+  no_log: True
+  when: crypto_keyfile is changed
+
+- name: Secure crypto keyfile
+  file:
+    path: /crypto_keyfile.bin
+    mode: 0000
+
+- name: Secure /boot
+  file:
+    path: /boot
+    mode: g-rwx,o-rwx
+    recurse: yes
+
+- name: Update /etc/crypttab
+  replace:
+    path: /etc/crypttab
+    regexp: '^({{ cryptroot_mapper_name.stdout }}.*) none luks,discard'
+    replace: '\1 /crypto_keyfile.bin luks,keyscript=/bin/cat'
+
+- name: Create /etc/initramfs-tools/hooks/crypto_keyfile
+  copy:
+    dest: /etc/initramfs-tools/hooks/crypto_keyfile
+    mode: +x
+    content: |
+      #!/bin/sh
+      cp /crypto_keyfile.bin "${DESTDIR}"
+
+- name: Update-initramfs
+  command: update-initramfs -u
+  when: crypto_keyfile is changed
+
+- name: reboot to check if automatic unlock works
+  reboot:
+  when: auto_unlock_reboot and crypto_keyfile is changed
