@@ -7,7 +7,7 @@
 - name: Find root-partition crypt device
   shell: |
     root=$(grep -o "root=[^ ]*" /proc/cmdline | cut -d "=" -f2);
-    lsblk --inverse --paths --list --noheadings "$root" | awk '$6=="crypt" {getline; print $1}'
+    lsblk --inverse --paths --noheadings "$root" | sed 's/^[└─ `-]*//g' | awk '$6=="crypt" {getline; print $1}'
   changed_when: false
   register: cryptroot
 
@@ -18,7 +18,7 @@
 - name: Get crypt mapper name
   shell: |
     root=$(grep -o "root=[^ ]*" /proc/cmdline | cut -d "=" -f2);
-    lsblk --inverse --list --noheadings "$root" | awk '$6=="crypt" {print $1}'
+    lsblk --inverse --noheadings "$root" | sed 's/^[└─ `-]*//g' | awk '$6=="crypt" {print $1}'
   changed_when: false
   register: cryptroot_mapper_name
 
@@ -59,7 +59,7 @@
 - name: Update /etc/crypttab
   replace:
     path: /etc/crypttab
-    regexp: '^({{ cryptroot_mapper_name.stdout }}.*) none luks,discard'
+    regexp: '^({{ cryptroot_mapper_name.stdout }}.*) none luks(,discard)?'
     replace: '\1 /crypto_keyfile.bin luks,keyscript=/bin/cat'
 
 - name: Create /etc/initramfs-tools/hooks/crypto_keyfile
