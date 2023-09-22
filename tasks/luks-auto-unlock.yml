@@ -35,6 +35,13 @@
     creates: /crypto_keyfile.bin
   register: crypto_keyfile
 
+- name: Check if unlock works
+  command:
+    cmd: cryptsetup open --test-passphrase --key-file /crypto_keyfile.bin {{ cryptroot.stdout }}
+  changed_when: false
+  failed_when: false
+  register: luks_unlock_check
+
 # we cannot use the master key on LUKS2 (https://access.redhat.com/solutions/1543373)
 - name: prompt for luks password
   pause:
@@ -42,7 +49,7 @@
     echo: no
   no_log: True
   register: luks_pass
-  when: crypto_keyfile is changed
+  when: luks_unlock_check.rc != 0
 
 - name: Add crypto keyfile to luks
   expect:
@@ -50,7 +57,7 @@
     responses:
       passphrase: "{{ luks_pass.user_input }}"
   no_log: True
-  when: crypto_keyfile is changed
+  when: luks_unlock_check.rc != 0
 
 - name: Secure crypto keyfile
   file:
